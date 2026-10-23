@@ -1,5 +1,12 @@
 import { createHash, randomUUID } from "node:crypto";
-import { acquireLock, cacheGet, cacheSet, incrBy, cacheDel } from "../redis";
+import {
+  acquireLock,
+  cacheGet,
+  cacheSet,
+  incrBy,
+  cacheDel,
+  setExpiry,
+} from "../redis";
 import { config } from "../config";
 
 // ---------------------------------------------------------------------------
@@ -18,7 +25,16 @@ const BLACKLIST_PREFIX = "grat:dedup:blacklist:";
 export const BLACKLIST_FAILURE_THRESHOLD = 3;
 
 /** How long (ms) a blacklisted fingerprint is blocked before it can be retried. */
-export const BLACKLIST_COOLDOWN_MS = 60_000; // 1 minute
+export const BLACKLIST_COOLDOWN_MS = 10 * 60_000;
+
+export class BlacklistedTransactionError extends Error {
+  constructor(txHash: string) {
+    super(
+      `Transaction ${txHash} is temporarily blocked after repeated processing failures. Retry after the 10-minute cooldown.`,
+    );
+    this.name = "BlacklistedTransactionError";
+  }
+}
 
 // ---------------------------------------------------------------------------
 // Request fingerprinting
@@ -138,7 +154,7 @@ export async function recordFailure(fp: string): Promise<number> {
   // Set the TTL only on the first increment so it functions as a rolling
   // window; the key expires automatically if no additional failures arrive.
   if (count === 1) {
-    await cacheSet(failKey, String(count), cooldownSeconds);
+    await setExpiry(failKey, cooldownSeconds);
   }
 
   if (count >= BLACKLIST_FAILURE_THRESHOLD) {
