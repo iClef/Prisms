@@ -13,7 +13,13 @@ import {
   releaseConcurrency,
 } from "../budget";
 import { getCache, setCache } from "../cache";
-import { SYSTEM_PROMPT, buildUserPrompt, estimateTokens } from "./prompts";
+import {
+  MAX_AI_INPUT_LENGTH,
+  SYSTEM_PROMPT,
+  buildUserPrompt,
+  estimateTokens,
+  sanitizeUserInput,
+} from "./prompts";
 import type { AIExplanation } from "./types";
 
 // ---------------------------------------------------------------------------
@@ -119,6 +125,11 @@ export async function explainError(
   txHash: string,
   network: string,
 ): Promise<AIExplanation> {
+  const sanitizedReportJson = sanitizeUserInput(reportJson);
+  if (sanitizedReportJson.length > MAX_AI_INPUT_LENGTH) {
+    throw new Error(`AI input exceeds the ${MAX_AI_INPUT_LENGTH}-character limit.`);
+  }
+
   const fp = fingerprint(txHash, network, "explain");
 
   // 1. Cache hit — return immediately
@@ -149,7 +160,7 @@ export async function explainError(
 
   try {
     // 5. Call the LLM
-    const result = await callLLM(reportJson);
+    const result = await callLLM(sanitizedReportJson);
 
     const explanation: AIExplanation = {
       summary: result.summary,

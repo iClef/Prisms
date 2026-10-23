@@ -3,6 +3,7 @@ import { explainError } from "../ai";
 import { getBudgetStatus } from "../budget";
 import { BudgetExceededError, ConcurrencyLimitError } from "../budget";
 import { invalidateByTxHash, clearAll } from "../cache";
+import { MAX_AI_INPUT_LENGTH, sanitizeUserInput } from "../ai/prompts";
 
 // ---------------------------------------------------------------------------
 // Request / response schemas (inline for now — could be moved to a schema file)
@@ -39,8 +40,26 @@ export async function aiRoutes(app: FastifyInstance) {
     }
 
     try {
-      const reportJson = JSON.stringify(report);
-      const explanation = await explainError(reportJson, tx_hash, network);
+      const reportJson = JSON.stringify(report, (_key, value: unknown) =>
+        typeof value === "string" ? sanitizeUserInput(value) : value,
+      );
+      const sanitizedInput = sanitizeUserInput(reportJson);
+      request.log.info(
+        { tx_hash, network, sanitized_input: sanitizedInput },
+        "AI explain request received",
+      );
+
+      if (sanitizedInput.length > MAX_AI_INPUT_LENGTH) {
+        return reply.status(413).send({
+          error: `AI input exceeds the ${MAX_AI_INPUT_LENGTH}-character limit.`,
+        });
+      }
+
+      const explanation = await explainError(sanitizedInput, tx_hash, network);
+      request.log.info(
+        { tx_hash, network, sanitized_input: sanitizedInput, response: explanation },
+        "AI explain response generated",
+      );
       return explanation;
     } catch (err) {
       if (err instanceof BudgetExceededError) {
