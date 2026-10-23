@@ -1,6 +1,11 @@
+import { EventEmitter } from "node:events";
 import { config } from "../config";
 import { incrBy, decrBy, getNumber, setExpiry } from "../redis";
-import { BudgetExceededError, ConcurrencyLimitError } from "./errors";
+import {
+  BudgetExceededError,
+  BudgetWarningError,
+  ConcurrencyLimitError,
+} from "./errors";
 import type { BudgetStatus } from "../ai/types";
 
 // ---------------------------------------------------------------------------
@@ -9,6 +14,15 @@ import type { BudgetStatus } from "../ai/types";
 const HOURLY_KEY = "grat:budget:hourly";
 const DAILY_KEY = "grat:budget:daily";
 const CONCURRENT_KEY = "grat:budget:concurrent";
+
+export const budgetWarningEmitter = new EventEmitter();
+
+interface ResourceUsage {
+  cpu_used: number;
+  memory_used: number;
+  cpu_limit: number;
+  memory_limit: number;
+}
 
 // ---------------------------------------------------------------------------
 // Time helpers
@@ -149,4 +163,78 @@ export async function acquireConcurrency(): Promise<number> {
 export async function releaseConcurrency(): Promise<number> {
   const val = await decrBy(CONCURRENT_KEY, 1);
   return Math.max(0, val);
+}
+
+export async function checkReplayBudget(
+  txHash: string,
+  usage: ResourceUsage,
+  previousUsage?: ResourceUsage | null,
+): Promise<void> {
+  const checks = [
+    {
+      resource: "cpu" as const,
+      used: usage.cpu_used,
+      limit: usage.cpu_limit,
+      previousUsed: previousUsage?.cpu_used,
+      previousLimit: previousUsage?.cpu_limit,
+      threshold: config.budget.cpuWarningThresholdPercent,
+    },
+    {
+      resource: "memory" as const,
+      used: usage.memory_used,
+      limit: usage.memory_limit,
+      previousUsed: previousUsage?.memory_used,
+      previousLimit: previousUsage?.memory_limit,
+      threshold: config.budget.memoryWarningThresholdPercent,
+    },
+  ];
+
+  for (const check of checks) {
+    if (check.limit <= 0 || (check.used / check.limit) * 100 < check.threshold) {
+      continue;
+    }
+
+    if (
+      previousUsage &&
+      check.previousLimit &&
+      check.previousUsed !== undefined &&
+      (check.previousUsed / check.previousLimit) * 100 >= check.threshold
+    ) {
+      continue;
+    }
+
+    const warning = new BudgetWarningError({
+      txHash,
+      resource: check.resource,
+      used: check.used,
+      limit: check.limit,
+      thresholdPercent: check.threshold,
+    });
+    budgetWarningEmitter.emit("warning", warning);
+
+    if (config.budget.alertWebhookUrl) {
+      try {
+        const response = await fetch(config.budget.alertWebhookUrl, {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({
+            tx_hash: warning.tx_hash,
+            resource: warning.resource,
+            usage: {
+              used: warning.used,
+              limit: warning.limit,
+              percent: warning.usage_percent,
+            },
+            threshold_percent: warning.threshold_percent,
+          }),
+          signal: AbortSignal.timeout(5_000),
+        });
+        if (!response.ok) {
+          console.warn(`Budget alert webhook returned HTTP ${response.status}`);
+        }
+      } catch (error) {
+        console.warn("Budget alert webhook delivery failed:", error);
+      }
+    }
+  }
 }

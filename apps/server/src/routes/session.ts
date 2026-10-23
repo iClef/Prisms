@@ -1,5 +1,6 @@
 import type { FastifyInstance } from "fastify";
 import type { SessionStore, TraceSnapshot } from "../session-store";
+import { checkReplayBudget } from "../budget";
 
 // ---------------------------------------------------------------------------
 // Request / response schemas
@@ -163,12 +164,22 @@ export async function sessionRoutes(app: FastifyInstance) {
         return reply.status(403).send({ error: "Invalid or expired token" });
       }
 
+      const sessionMeta = await store.get(sessionId);
+      const previousUsage = sessionMeta?.traceSnapshot?.resource_profile;
       const updated = await store.updateSnapshot(sessionId, snapshot);
       if (!updated) {
         return reply.status(404).send({
           status: "not_found",
           message: `Session '${sessionId}' does not exist or has expired.`,
         });
+      }
+
+      if (snapshot.resource_profile) {
+        await checkReplayBudget(
+          sessionMeta?.txHash ?? "unknown",
+          snapshot.resource_profile,
+          previousUsage,
+        );
       }
 
       return reply.send({ status: "ok" });

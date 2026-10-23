@@ -4,5 +4,11 @@ export {
   recordUsage,
   acquireConcurrency,
   releaseConcurrency,
+  checkReplayBudget,
+  budgetWarningEmitter,
 } from "./tracker";
-export { BudgetExceededError, ConcurrencyLimitError } from "./errors";
+export {
+  BudgetExceededError,
+  BudgetWarningError,
+  ConcurrencyLimitError,
+} from "./errors";
