@@ -6,6 +6,7 @@ type Environment = Record<string, string | undefined>;
 type ServerConfig = {
   port: number;
   redisUrl: string;
+  sorobanRpcUrl: string;
   gratBinaryPath: string;
   ai: {
     apiKey: string;
@@ -108,6 +109,11 @@ export const config: ServerConfig = {
   redisUrl: isProduction
     ? validateUrl("REDIS_URL", requiredString("REDIS_URL"), ["redis:", "rediss:"])
     : urlValue("REDIS_URL", "redis://localhost:6379", ["redis:", "rediss:"]),
+  sorobanRpcUrl: urlValue(
+    "SOROBAN_RPC_URL",
+    "https://soroban-testnet.stellar.org",
+    ["http:", "https:"],
+  ),
   gratBinaryPath: stringValue("GRAT_BINARY", "grat"),
 
   ai: {
